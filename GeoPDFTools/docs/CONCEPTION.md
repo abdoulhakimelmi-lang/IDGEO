@@ -1,0 +1,133 @@
+# GeoPDF Tools — Document de conception
+
+Boîte à outils Python (`.pyt`) pour ArcGIS Pro **Standard** permettant d'associer
+automatiquement des documents PDF aux entités d'une couche SIG, à partir d'un
+identifiant présent dans le nom du fichier et/ou dans le texte du PDF.
+
+- Dépendances : ArcPy (fourni avec ArcGIS Pro) et PyMuPDF (`import pymupdf`).
+- Aucune extension (Spatial Analyst, Network Analyst…) ni licence Advanced.
+
+---
+
+## 1. Compatibilité de licence
+
+| Opération | Fonction ArcPy | Niveau de licence |
+|---|---|---|
+| Lire les identifiants | `arcpy.da.SearchCursor` | Basic |
+| Lister / vérifier les champs | `arcpy.ListFields`, `arcpy.Describe` | Basic |
+| Créer le champ résultat | `arcpy.management.AddField` | Basic |
+| Écrire les liens | `arcpy.da.UpdateCursor` (champ résultat uniquement) | Basic |
+| Données versionnées / SDE | `arcpy.da.Editor` | Basic |
+| Progression / messages | `SetProgressor`, `SetProgressorPosition`, `AddMessage`, `AddWarning`, `AddError` | — |
+| V2 : pièces jointes | `EnableAttachments`, `AddAttachments` | Basic |
+
+Tout fonctionne en Basic, donc en Standard. Le `UpdateCursor` n'ouvre que
+`OID@` et le champ résultat : jamais `SHAPE@`, jamais `deleteRow()`.
+
+## 2. Décisions validées
+
+| Sujet | Décision |
+|---|---|
+| Nom du package | `geopdf_core/` (évite la collision du nom générique `src`) |
+| Paramètres ajoutés | Créer le champ s'il n'existe pas (défaut : oui) ; mode d'écriture `Compléter` (défaut) / `Remplacer` ; sortie dérivée pour ModelBuilder |
+| Sélection active | Si une sélection existe : seules les entités sélectionnées sont traitées. Sinon : toute la couche. Le comportement est annoncé dans les messages ArcGIS Pro |
+| Contenu du champ résultat | Chemin **complet** du PDF ; plusieurs PDF séparés par ` \| ` |
+| Casse | Recherche insensible à la casse |
+| Formats | V1 testée sur File Geodatabase ; compatibilité SDE prévue (`arcpy.da.Editor`) ; shapefile accepté avec avertissement (champ texte limité à 254 caractères) |
+| Sécurité | Aucune modification de géométrie, aucune suppression d'entité, de champ ou de PDF ; les PDF sont ouverts en lecture seule |
+
+## 3. Arborescence
+
+```
+GeoPDFTools/
+├── GeoPDFTools.pyt          # Toolbox ArcGIS : paramètres, validation, orchestration (étape 5)
+├── geopdf_core/
+│   ├── __init__.py
+│   ├── dependencies.py      # Vérification de PyMuPDF                         (étape 1)
+│   ├── models.py            # Statuts, modes, structures de données           (étape 1)
+│   ├── pdf_reader.py        # Recherche des PDF, lecture du texte             (étape 1)
+│   ├── matcher.py           # Normalisation, index et recherche des ID        (étape 2)
+│   ├── report.py            # Rapport CSV et résumé                           (étape 3)
+│   ├── arcgis_utils.py      # Seul module important arcpy                     (étape 4)
+│   └── link_writers.py      # FieldLinkWriter (V1), AttachmentLinkWriter (V2) (étape 4)
+├── tests/                   # Tests pytest exécutables sans ArcGIS
+├── docs/CONCEPTION.md
+├── requirements.txt
+├── requirements-dev.txt
+├── pytest.ini
+└── README.md                                                                  (étape 5)
+```
+
+Principe : **seuls `arcgis_utils.py`, `link_writers.py` et le `.pyt` importent
+arcpy**. Le reste est du Python pur, testable avec pytest hors d'ArcGIS Pro.
+
+## 4. Paramètres de l'outil « Associer PDF aux entités SIG »
+
+| # | Libellé | Type | Remarque |
+|---|---|---|---|
+| 0 | Couche SIG | `GPFeatureLayer` | |
+| 1 | Champ identifiant | `Field` | Dépend de 0 ; Texte, Entier, GUID |
+| 2 | Dossier des PDF | `DEFolder` | Parcours récursif |
+| 3 | Nom du champ résultat | `GPString` | Défaut `LIEN_PDF` |
+| 4 | Mode de recherche | `GPString` (liste) | `Nom du fichier` / `Contenu du PDF` / `Nom + contenu` (défaut) |
+| 5 | Rapport CSV | `DEFile` sortie, facultatif | |
+| 6 | Créer le champ s'il n'existe pas | `GPBoolean` | Défaut : coché |
+| 7 | Mode d'écriture | `GPString` (liste) | `Compléter` (défaut) / `Remplacer` |
+| 8 | Couche mise à jour | Sortie dérivée | Pour ModelBuilder |
+
+Un outil de géotraitement ne peut pas ouvrir de boîte de dialogue en cours
+d'exécution : la « proposition » de création du champ se fait par un
+avertissement dans `updateMessages` + la case à cocher n°6.
+
+## 5. Déroulement du traitement
+
+1. Vérifier PyMuPDF (`dependencies.check_pymupdf`).
+2. Lire une seule fois les identifiants : `{id_normalisé: [OID, …]}` (doublons signalés, nulls ignorés).
+3. Construire un moteur de recherche unique (regex « trie » avec bornes alphanumériques).
+4. Lister récursivement les `*.pdf` (extension insensible à la casse), initialiser la barre de progression.
+5. Pour chaque PDF : ouverture PyMuPDF, texte page par page, gestion des PDF chiffrés / corrompus / sans texte.
+6. Recherche selon le mode (nom, contenu, ou union des deux).
+7. Statut : 0 ID → `AUCUNE_CORRESPONDANCE`, 1 → `ASSOCIE`, ≥ 2 → `PLUSIEURS_CORRESPONDANCES` (associé à toutes les entités).
+8. Agrégation `{OID: [chemins]}` en mémoire.
+9. Écriture **après** la lecture de tous les PDF (pas d'écriture partielle si la lecture échoue) : un seul `UpdateCursor`, uniquement les lignes concernées, fusion sans doublon en mode `Compléter`.
+10. Rapport CSV (UTF-8 avec BOM, séparateur `;`) et résumé dans ArcGIS Pro.
+
+## 6. Rapport CSV
+
+Colonnes : `nom_pdf ; chemin_pdf ; statut ; identifiant_trouve ; nombre_correspondances ;
+nombre_pages ; erreur ; source_detection ; nombre_entites ; avertissement`.
+
+Statuts : `ASSOCIE`, `PLUSIEURS_CORRESPONDANCES`, `AUCUNE_CORRESPONDANCE`,
+`PDF_SANS_TEXTE`, `PDF_ILLISIBLE`.
+
+## 7. Risques techniques
+
+| # | Risque | Mesure |
+|---|---|---|
+| R1 | Identifiants courts / numériques → faux positifs | Avertissement si < 4 caractères ou purement numérique |
+| R2 | Texte PDF altéré (`N57 _002`, césure, ligatures) | Normalisation NFKC + majuscules ; option de tolérance aux séparateurs |
+| R3 | PDF scannés sans texte | Statut `PDF_SANS_TEXTE` ; détection possible par le nom de fichier ; OCR hors V1 |
+| R4 | Longueur du champ texte (shapefile : 254) | Champ créé large en GDB ; jamais de troncature silencieuse ; avertissement + rapport |
+| R5 | Sélection / requête de définition | Comportement validé (§2) et annoncé dans les messages |
+| R6 | Données versionnées / SDE | `arcpy.da.Editor` si nécessaire |
+| R7 | Verrous | Message explicite ; lecture complète avant toute écriture |
+| R8 | Ré-exécution | Mode `Compléter` = fusion sans doublon ; entités sans correspondance non modifiées |
+| R9 | Cache des modules dans ArcGIS Pro | Package au nom unique, `sys.path` relatif au `.pyt`, `importlib.reload` en développement |
+| R10 | Installation de PyMuPDF | Cloner `arcgispro-py3`, puis `pip install pymupdf` ; repli sur `import fitz` pour PyMuPDF < 1.24.3 |
+| R11 | Licence PyMuPDF (AGPL v3 / commerciale) | À vérifier avant toute diffusion externe |
+| R12 | Volumétrie (gros PDF, milliers de fichiers) | Lecture page par page, progression par fichier, pas de multiprocessing en V1 |
+| R13 | Chemins réseau / accents | `pathlib`, chemins absolus, UTF-8 |
+
+## 8. Plan de développement
+
+1. **Étape 1** : `models.py`, `dependencies.py`, `pdf_reader.py` + tests.
+2. **Étape 2** : `matcher.py` + tests.
+3. **Étape 3** : `report.py` + tests.
+4. **Étape 4** : `arcgis_utils.py` + `link_writers.py`.
+5. **Étape 5** : `GeoPDFTools.pyt` + `README.md`.
+
+## 9. Évolutions prévues (V2+)
+
+- `AttachmentLinkWriter` : stockage en pièces jointes ArcGIS (`EnableAttachments` / `AddAttachments`).
+- Limite du nombre de pages lues par PDF (paramètre déjà présent dans `pdf_reader.read_pdf`).
+- OCR (Tesseract) pour les PDF scannés.

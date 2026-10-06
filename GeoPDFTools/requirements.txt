@@ -1,0 +1,3 @@
+# Dépendance à installer dans l'environnement Python cloné d'ArcGIS Pro.
+# (arcpy est fourni par ArcGIS Pro et ne doit pas être installé avec pip.)
+pymupdf>=1.24.3
