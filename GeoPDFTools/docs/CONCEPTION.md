@@ -74,6 +74,10 @@ arcpy**. Le reste est du Python pur, testable avec pytest hors d'ArcGIS Pro.
 | 6 | Créer le champ s'il n'existe pas | `GPBoolean` | Défaut : coché |
 | 7 | Mode d'écriture | `GPString` (liste) | `Compléter` (défaut) / `Remplacer` |
 | 8 | Couche mise à jour | Sortie dérivée | Pour ModelBuilder |
+| 9 | ☐ Recherche tolérante | `GPBoolean` | Défaut : **décoché** (recherche stricte). À activer si l'extraction produit `N57 _001` ou `N57-` / `001` |
+
+`allow_risky_in_content` (recherche des identifiants courts ou numériques dans le
+texte) **n'est pas exposé** dans l'interface : ces identifiants restent protégés.
 
 Un outil de géotraitement ne peut pas ouvrir de boîte de dialogue en cours
 d'exécution : la « proposition » de création du champ se fait par un
@@ -92,13 +96,49 @@ avertissement dans `updateMessages` + la case à cocher n°6.
 9. Écriture **après** la lecture de tous les PDF (pas d'écriture partielle si la lecture échoue) : un seul `UpdateCursor`, uniquement les lignes concernées, fusion sans doublon en mode `Compléter`.
 10. Rapport CSV (UTF-8 avec BOM, séparateur `;`) et résumé dans ArcGIS Pro.
 
-## 6. Rapport CSV
+## 6. Rapport CSV (`report.py`)
 
-Colonnes : `nom_pdf ; chemin_pdf ; statut ; identifiant_trouve ; nombre_correspondances ;
-nombre_pages ; erreur ; source_detection ; nombre_entites ; avertissement`.
+UTF-8 avec BOM, séparateur `;`, une ligne par PDF analysé.
 
-Statuts : `ASSOCIE`, `PLUSIEURS_CORRESPONDANCES`, `AUCUNE_CORRESPONDANCE`,
-`PDF_SANS_TEXTE`, `PDF_ILLISIBLE`.
+| Colonne | Contenu |
+|---|---|
+| `nom_pdf` | Nom du fichier |
+| `chemin_pdf` | Chemin complet |
+| `statut` | `ASSOCIE`, `PLUSIEURS_CORRESPONDANCES`, `AUCUNE_CORRESPONDANCE`, `PDF_SANS_TEXTE`, `PDF_ILLISIBLE` |
+| `identifiant_trouve` | Identifiants détectés, séparés par ` \| ` |
+| `source_detection` | `NOM`, `CONTENU` ou `NOM+CONTENU` (global au PDF) |
+| `nombre_correspondances` | Nombre d'identifiants distincts |
+| `nombre_entites` | Nombre d'entités (différent si identifiant dupliqué dans la couche) |
+| `nombre_pages` | Nombre de pages (0 si le PDF n'a pas pu être ouvert) |
+| `contenu_pdf` | `EXPLOITABLE`, `ILLISIBLE`, `SANS_TEXTE`, `NON_ANALYSE` (mode « Nom du fichier ») |
+| `avertissement` | Avertissements (doublons, plusieurs identifiants, contenu non exploitable, MuPDF) |
+| `erreur` | Erreur de lecture du PDF |
+| `detail_sources` | Source par identifiant, ex. `N57_001 [NOM+CONTENU] \| A31_0042 [CONTENU]` |
+| `oid_entites` | ObjectID des entités concernées |
+
+**Association par le nom avec contenu non exploitable** (décision validée) : un PDF
+illisible ou scanné dont le nom contient un identifiant est `ASSOCIE`. Pas de statut
+supplémentaire : `contenu_pdf` vaut `ILLISIBLE` / `SANS_TEXTE`, la colonne
+`avertissement` contient « Contenu PDF non exploitable (…) : association par le nom du
+fichier uniquement », et le résumé compte ces cas séparément.
+
+Protections : les cellules commençant par `= + - @` sont préfixées d'une apostrophe
+(pas d'exécution de formule dans Excel) ; les retours à la ligne sont remplacés par des
+espaces ; écriture dans un fichier temporaire puis renommage (un rapport ouvert dans
+Excel n'est jamais à moitié écrit).
+
+Résumé (`summarize(...).messages()`), prêt pour `AddMessage` / `AddWarning` :
+
+```
+PDF analysés : 250
+Associés : 221
+Plusieurs correspondances : 7
+Sans correspondance : 19
+PDF sans texte : 2
+PDF illisibles : 1
+Associés par le nom avec contenu PDF non exploitable : 3   (si > 0)
+Entités concernées : 228
+```
 
 ## 7. Risques techniques
 
@@ -146,3 +186,15 @@ Statuts : `ASSOCIE`, `PLUSIEURS_CORRESPONDANCES`, `AUCUNE_CORRESPONDANCE`,
 Statut d'un PDF : ≥ 1 identifiant → `ASSOCIE` / `PLUSIEURS_CORRESPONDANCES`, même si le
 contenu est illisible mais que le nom a suffi (l'erreur reste dans le rapport). Sinon :
 `PDF_ILLISIBLE` / `PDF_SANS_TEXTE` si le contenu devait être lu, sinon `AUCUNE_CORRESPONDANCE`.
+
+## 11. Limites acceptées pour la V1
+
+- Plages d'identifiants (`N57_001 à N57_003`, `SEC-2026-001/002`) : non interprétées.
+- Suffixes après un séparateur (`SEC-2026-001-BIS`, `N57_001_B`) : reconnus comme l'identifiant de base s'il n'existe pas de variante dans la couche.
+- Identifiant collé à un mot (`SectionN57_001`) : refusé.
+- Pas d'OCR pour les PDF scannés.
+- Confusions `O`/`0` (OCR de mauvaise qualité) : non corrigées.
+- Zéros de tête : `N57_1` ≠ `N57_001`.
+- Mots sans chiffre (`NORD`) : simple avertissement.
+- Identifiants courts / numériques : cherchés uniquement dans le nom des fichiers.
+- Mode tolérant : `N57_002` et `N57-002` sont fusionnés (traités comme doublon).

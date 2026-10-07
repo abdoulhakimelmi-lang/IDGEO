@@ -144,6 +144,21 @@ class DetectionSource(str, Enum):
         return None
 
 
+class ContentState(str, Enum):
+    """État du contenu d'un PDF (colonne ``contenu_pdf`` du rapport).
+
+    Permet de distinguer un PDF ``ASSOCIE`` grâce à son contenu d'un PDF
+    ``ASSOCIE`` uniquement grâce à son nom parce que le contenu n'a pas pu
+    être exploité.
+    """
+
+    EXPLOITABLE = "EXPLOITABLE"
+    ILLISIBLE = "ILLISIBLE"
+    SANS_TEXTE = "SANS_TEXTE"
+    NON_ANALYSE = "NON_ANALYSE"
+    """Le mode de recherche « Nom du fichier » ne lit pas le contenu."""
+
+
 @dataclass
 class IdentifierMatch:
     """Un identifiant de la couche trouvé dans un PDF."""
@@ -165,6 +180,16 @@ class PdfResult:
     status: PdfStatus
     matches: List[IdentifierMatch] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
+    content_state: ContentState = ContentState.NON_ANALYSE
+
+    @property
+    def is_associated(self) -> bool:
+        return self.status in (PdfStatus.ASSOCIE, PdfStatus.PLUSIEURS_CORRESPONDANCES)
+
+    @property
+    def associated_without_content(self) -> bool:
+        """Associé par le nom alors que le contenu, demandé, n'était pas exploitable."""
+        return self.is_associated and self.content_state in (ContentState.ILLISIBLE, ContentState.SANS_TEXTE)
 
     @property
     def identifiers(self) -> List[str]:

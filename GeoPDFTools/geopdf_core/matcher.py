@@ -30,7 +30,15 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Dict, Hashable, Iterable, List, Optional, Pattern, Sequence, Tuple
 
-from .models import DetectionSource, IdentifierMatch, PdfDocument, PdfResult, PdfStatus, SearchMode
+from .models import (
+    ContentState,
+    DetectionSource,
+    IdentifierMatch,
+    PdfDocument,
+    PdfResult,
+    PdfStatus,
+    SearchMode,
+)
 
 # --- Paramètres de prudence -------------------------------------------------
 
@@ -340,8 +348,9 @@ def match_document(document: PdfDocument, index: IdentifierIndex, mode: SearchMo
 
     Statut :
     - au moins un identifiant : ``ASSOCIE`` (1) ou ``PLUSIEURS_CORRESPONDANCES`` (≥ 2),
-      même si le contenu est illisible mais que le **nom** a permis l'association
-      (l'erreur de lecture reste dans le rapport) ;
+      même si le contenu est illisible mais que le **nom** a permis l'association.
+      Dans ce cas ``content_state`` vaut ``ILLISIBLE`` ou ``SANS_TEXTE`` et un
+      avertissement dédié est ajouté ;
     - aucun identifiant : ``PDF_ILLISIBLE`` / ``PDF_SANS_TEXTE`` si le contenu
       devait être lu et n'a pas pu l'être, sinon ``AUCUNE_CORRESPONDANCE``.
     """
@@ -375,4 +384,23 @@ def match_document(document: PdfDocument, index: IdentifierIndex, mode: SearchMo
     else:
         status = PdfStatus.AUCUNE_CORRESPONDANCE
 
-    return PdfResult(document=document, status=status, matches=matches, warnings=warnings)
+    content_state = _content_state(document, mode)
+    if matches and content_state in (ContentState.ILLISIBLE, ContentState.SANS_TEXTE):
+        reason = document.error if content_state is ContentState.ILLISIBLE else "aucun texte, PDF scanné ?"
+        warnings.append(
+            "Contenu PDF non exploitable ({}) : association par le nom du fichier uniquement.".format(reason)
+        )
+
+    return PdfResult(
+        document=document, status=status, matches=matches, warnings=warnings, content_state=content_state
+    )
+
+
+def _content_state(document: PdfDocument, mode: SearchMode) -> ContentState:
+    if not mode.uses_content:
+        return ContentState.NON_ANALYSE
+    if document.read_status is PdfStatus.PDF_ILLISIBLE:
+        return ContentState.ILLISIBLE
+    if document.read_status is PdfStatus.PDF_SANS_TEXTE:
+        return ContentState.SANS_TEXTE
+    return ContentState.EXPLOITABLE

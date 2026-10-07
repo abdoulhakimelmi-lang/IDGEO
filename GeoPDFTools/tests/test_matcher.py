@@ -22,7 +22,7 @@ from geopdf_core.matcher import (
     normalize_identifier,
     normalize_text,
 )
-from geopdf_core.models import DetectionSource, PdfDocument, PdfStatus, SearchMode
+from geopdf_core.models import ContentState, DetectionSource, PdfDocument, PdfStatus, SearchMode
 from geopdf_core.pdf_reader import find_pdf_files, read_pdf
 
 SIG_IDS = ["N57_001", "N57_0010", "RN57-025", "A31_0042", "PR12+350", "SEC-2026-001"]
@@ -445,3 +445,52 @@ def test_many_identifiers_and_long_text():
     # Marges larges pour ne pas dépendre de la vitesse de la machine.
     assert build_seconds < 10
     assert search_seconds < 10
+
+
+# --- État du contenu (décision : association par le nom autorisée) ----------
+
+
+@pytest.mark.parametrize(
+    "mode, document, state",
+    [
+        (SearchMode.NOM_ET_CONTENU, doc("N57_001.pdf", "texte"), ContentState.EXPLOITABLE),
+        (SearchMode.CONTENU, doc("a.pdf", "  "), ContentState.SANS_TEXTE),
+        (SearchMode.NOM_ET_CONTENU, doc("a.pdf", error="Fichier vide", pages=0), ContentState.ILLISIBLE),
+        (SearchMode.NOM, doc("N57_001.pdf", error="Fichier vide", pages=0), ContentState.NON_ANALYSE),
+        (SearchMode.NOM, doc("N57_001.pdf"), ContentState.NON_ANALYSE),
+    ],
+)
+def test_content_state(index, mode, document, state):
+    assert match_document(document, index, mode).content_state is state
+
+
+def test_unreadable_pdf_associated_by_name_is_flagged(index):
+    result = match_document(
+        doc("N57_001_rapport.pdf", error="PDF protégé par mot de passe", pages=0), index, SearchMode.NOM_ET_CONTENU
+    )
+    assert result.status is PdfStatus.ASSOCIE
+    assert result.associated_without_content
+    assert result.warnings == [
+        "Contenu PDF non exploitable (PDF protégé par mot de passe) : association par le nom du fichier uniquement."
+    ]
+
+
+def test_scanned_pdf_associated_by_name_is_flagged(index):
+    result = match_document(doc("scan_RN57-025.pdf", "   "), index, SearchMode.NOM_ET_CONTENU)
+    assert result.associated_without_content
+    assert any("aucun texte" in w for w in result.warnings)
+
+
+def test_normal_association_is_not_flagged(index):
+    for mode in (SearchMode.NOM_ET_CONTENU, SearchMode.NOM):
+        result = match_document(doc("N57_001.pdf", "N57_001"), index, mode)
+        assert result.status is PdfStatus.ASSOCIE
+        assert not result.associated_without_content
+        assert not any("non exploitable" in w for w in result.warnings)
+
+
+def test_unreadable_pdf_without_match_is_not_flagged_as_associated(index):
+    result = match_document(doc("x.pdf", error="Fichier vide", pages=0), index, SearchMode.NOM_ET_CONTENU)
+    assert result.status is PdfStatus.PDF_ILLISIBLE
+    assert not result.associated_without_content
+    assert result.warnings == []
