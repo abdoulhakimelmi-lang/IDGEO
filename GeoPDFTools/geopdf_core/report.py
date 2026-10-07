@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Tuple, Union
 
-from .models import PdfResult, PdfStatus
+from .models import ContentState, PdfResult, PdfStatus
 
 CSV_ENCODING = "utf-8-sig"
 """UTF-8 avec BOM : indispensable pour qu'Excel affiche correctement les accents."""
@@ -70,7 +70,8 @@ def result_to_row(result: PdfResult) -> Dict[str, Union[str, int]]:
         "source_detection": source.value if source else "",
         "nombre_correspondances": result.match_count,
         "nombre_entites": result.entity_count,
-        "nombre_pages": document.page_count,
+        # Mode « Nom du fichier » : le PDF n'est pas ouvert, le nombre de pages est inconnu.
+        "nombre_pages": "" if result.content_state is ContentState.NON_ANALYSE else document.page_count,
         "contenu_pdf": result.content_state.value,
         "avertissement": LIST_SEPARATOR.join(warnings),
         "erreur": document.error or "",

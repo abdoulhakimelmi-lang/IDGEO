@@ -198,3 +198,61 @@ contenu est illisible mais que le nom a suffi (l'erreur reste dans le rapport). 
 - Mots sans chiffre (`NORD`) : simple avertissement.
 - Identifiants courts / numériques : cherchés uniquement dans le nom des fichiers.
 - Mode tolérant : `N57_002` et `N57-002` sont fusionnés (traités comme doublon).
+
+## 12. Mode « Nom du fichier » (décision validée)
+
+En mode `Nom du fichier`, le PDF **n'est pas ouvert** : aucune lecture PyMuPDF
+(performances, aucune lecture inutile). Conséquences dans le rapport :
+`contenu_pdf = NON_ANALYSE`, `nombre_pages` **vide** (inconnu, et non « 0 »),
+`erreur` vide (un PDF corrompu n'est pas détecté dans ce mode).
+
+## 13. Lecture de la couche et écriture des liens (étape 4)
+
+### Périmètre traité
+- Sélection active → seules les entités sélectionnées (message `WARNING` explicite).
+- Aucune sélection → toute la couche.
+- Requête de définition → respectée, jamais contournée (message `WARNING`).
+- Les curseurs sont ouverts **sur la couche** : ArcGIS applique lui-même sélection et filtre.
+
+### Champ résultat
+| Format | Création | Capacité |
+|---|---|---|
+| Géodatabase fichier | Texte 4000 | 4000 caractères |
+| Géodatabase d'entreprise | Texte 2000 (prudent : Oracle NVARCHAR2) | 2000 caractères — **non testé** |
+| Shapefile | Texte 254 + avertissement ; nom ≤ 10 caractères | 254 **octets** (mesure prudente) — **non testé** |
+| Champ existant | Utilisé tel quel s'il est de type texte et modifiable | Sa longueur réelle |
+
+Refus : champ existant non texte (jamais converti), champ non modifiable, champ
+identifiant / ObjectID / géométrie, création non autorisée, nom invalide.
+
+### Écriture (`FieldLinkWriter`)
+1. **Lecture** : `SearchCursor(["OID@", champ])`.
+2. **Plan** (Python pur) : valeur finale par entité, `ECRIRE` / `INCHANGE` / `TROP_LONG`.
+   Une valeur trop longue n'est **jamais tronquée** : l'entité n'est pas modifiée et
+   chaque PDF concerné reçoit l'avertissement « Lien NON écrit… » dans le rapport.
+3. **Écriture** : `UpdateCursor(["OID@", champ])`, `updateRow` uniquement pour les
+   entités `ECRIRE`. Une entité dont la valeur a changé depuis la lecture n'est pas
+   écrasée. Si rien n'est à écrire, aucun curseur d'écriture n'est ouvert.
+
+Toutes les vérifications bloquantes (champ, type, nom, capacité) ont lieu **avant**
+le curseur d'écriture : une erreur à ce stade ne modifie aucune entité.
+
+### Transactions
+- Géodatabase d'entreprise ou données versionnées : écriture dans `arcpy.da.Editor`
+  (annulation automatique en cas d'erreur) — **non testé**.
+- Géodatabase fichier / shapefile (V1) : pas de session de mise à jour. Une erreur
+  *pendant* l'écriture (très improbable après les contrôles) laisse les entités déjà
+  écrites ; le message d'erreur liste leurs OID.
+
+### À tester réellement dans ArcGIS Pro (DIR Est)
+Script fourni : `tests_arcgis/verifier_etape4.py` (géodatabase fichier + shapefile,
+données temporaires). Restent à tester sur données réelles :
+1. Géodatabase fichier : couche dans une carte, sélection, requête de définition.
+2. Couche en cours de mise à jour dans ArcGIS Pro (session d'édition ouverte, verrous).
+3. Géodatabase d'entreprise non versionnée (SQL Server / Oracle / PostgreSQL selon le site).
+4. Géodatabase d'entreprise versionnée (branche ou traditionnelle) : `arcpy.da.Editor`, paramètre `multiuser_mode`.
+5. Suivi des mises à jour (*editor tracking*) : ArcGIS met à jour `last_edited_user` / `last_edited_date` des entités écrites (comportement d'ArcGIS, non piloté par l'outil).
+6. Règles attributaires / déclencheurs pouvant modifier d'autres champs.
+7. Classes d'entités avec relations, topologie ou réseau.
+8. Longueur réelle des champs créés selon le SGBD ; caractères accentués dans un shapefile.
+9. Services d'entités (ArcGIS Online / Enterprise).
