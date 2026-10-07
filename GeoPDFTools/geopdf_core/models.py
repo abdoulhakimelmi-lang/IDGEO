@@ -121,3 +121,75 @@ class PdfDocument:
         if not self.has_text:
             return PdfStatus.PDF_SANS_TEXTE
         return None
+
+
+# --- Résultat de la recherche d'identifiants (étape 2) ----------------------
+
+
+class DetectionSource(str, Enum):
+    """Où un identifiant a été trouvé (colonne ``source_detection`` du rapport)."""
+
+    NOM = "NOM"
+    CONTENU = "CONTENU"
+    NOM_ET_CONTENU = "NOM+CONTENU"
+
+    @classmethod
+    def from_flags(cls, in_name: bool, in_content: bool) -> Optional["DetectionSource"]:
+        if in_name and in_content:
+            return cls.NOM_ET_CONTENU
+        if in_name:
+            return cls.NOM
+        if in_content:
+            return cls.CONTENU
+        return None
+
+
+@dataclass
+class IdentifierMatch:
+    """Un identifiant de la couche trouvé dans un PDF."""
+
+    key: str
+    """Forme normalisée (majuscules, Unicode normalisé) servant à la comparaison."""
+    value: str
+    """Valeur telle qu'elle figure dans la couche (pour l'affichage et le rapport)."""
+    oids: List[int]
+    """ObjectID des entités portant cet identifiant (plusieurs si doublon dans la couche)."""
+    source: DetectionSource
+
+
+@dataclass
+class PdfResult:
+    """Résultat complet pour un PDF : lecture + correspondances + statut final."""
+
+    document: PdfDocument
+    status: PdfStatus
+    matches: List[IdentifierMatch] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+
+    @property
+    def identifiers(self) -> List[str]:
+        """Identifiants trouvés (valeurs de la couche), dans l'ordre de détection."""
+        return [match.value for match in self.matches]
+
+    @property
+    def match_count(self) -> int:
+        """Nombre d'identifiants distincts trouvés."""
+        return len(self.matches)
+
+    @property
+    def oids(self) -> List[int]:
+        """ObjectID de toutes les entités à associer, sans doublon."""
+        return list(dict.fromkeys(oid for match in self.matches for oid in match.oids))
+
+    @property
+    def entity_count(self) -> int:
+        return len(self.oids)
+
+    @property
+    def detection_source(self) -> Optional[DetectionSource]:
+        """Source globale : NOM, CONTENU, NOM+CONTENU, ou ``None`` sans correspondance."""
+        in_name = any(m.source in (DetectionSource.NOM, DetectionSource.NOM_ET_CONTENU) for m in self.matches)
+        in_content = any(
+            m.source in (DetectionSource.CONTENU, DetectionSource.NOM_ET_CONTENU) for m in self.matches
+        )
+        return DetectionSource.from_flags(in_name, in_content)

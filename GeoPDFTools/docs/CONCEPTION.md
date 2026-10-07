@@ -131,3 +131,18 @@ Statuts : `ASSOCIE`, `PLUSIEURS_CORRESPONDANCES`, `AUCUNE_CORRESPONDANCE`,
 - `AttachmentLinkWriter` : stockage en pièces jointes ArcGIS (`EnableAttachments` / `AddAttachments`).
 - Limite du nombre de pages lues par PDF (paramètre déjà présent dans `pdf_reader.read_pdf`).
 - OCR (Tesseract) pour les PDF scannés.
+
+## 10. Règles de correspondance (étape 2, `matcher.py`)
+
+| Règle | Exemple accepté | Exemple refusé |
+|---|---|---|
+| Insensible à la casse et aux variantes Unicode (NFKC, espaces insécables, tirets typographiques, caractères invisibles) | `rn57–025` → `RN57-025` | — |
+| Pas collé à une lettre ou un chiffre | `inspection_N57_001_v2` | `N57_0010` pour `N57_001` |
+| Identifiant commençant/finissant par un chiffre : ne prolonge pas une suite numérique (`_ - / . , + :` suivi d'un chiffre) | `N57_001 15/09/2026` | `PR12+3500`, `RN57-025,5`, `rapport_2026_001` pour `2026` |
+| L'identifiant le plus long l'emporte | `N57_001_A` (si présent dans la couche) | — |
+| Identifiants courts (< 4 caractères) ou numériques (< 6 chiffres) : nom de fichier uniquement | `12.pdf` pour `12` | « page 12 » dans le texte |
+| Mode tolérant (option, désactivé par défaut) : séparateurs interchangeables | `N57 _001`, `N57-⏎001` | `N57001` (séparateur absent) |
+
+Statut d'un PDF : ≥ 1 identifiant → `ASSOCIE` / `PLUSIEURS_CORRESPONDANCES`, même si le
+contenu est illisible mais que le nom a suffi (l'erreur reste dans le rapport). Sinon :
+`PDF_ILLISIBLE` / `PDF_SANS_TEXTE` si le contenu devait être lu, sinon `AUCUNE_CORRESPONDANCE`.
